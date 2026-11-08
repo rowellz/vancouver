@@ -1,15 +1,16 @@
-// Metro Vancouver transit on its timetable: SkyTrain (Expo, Millennium, Canada Line), West Coast Express, the SeaBus,
-// buses and trolleybuses, each where the schedule says it is right now (America/Vancouver time), riding concrete
-// guideways where the line is elevated and vanishing where it goes underground.
+// Transit on its timetable: in Vancouver SkyTrain (Expo, Millennium, Canada Line), West Coast Express, the SeaBus,
+// buses and trolleybuses; in New York (?city=nyc) the subway and the buses. Each vehicle is where the schedule says
+// it is right now (the city's time), riding guideways and els where the line is elevated and vanishing where it goes
+// underground. Another city's data is in data/<city>/ (tools/transit_data.py, CITY=<city>), with its legend
+// (man.groups), its trains (a route's model and cars) and the look of its structures (man.structure).
 //
-// Data: TransLink static GTFS (https://gtfs-static.translink.ca/gtfs/google_transit.zip), "Route and arrival data
+// Vancouver data: TransLink static GTFS (https://gtfs-static.translink.ca/gtfs/google_transit.zip), "Route and arrival data
 // used in this product or service is provided by permission of TransLink. TransLink assumes no responsibility for the
 // accuracy or currency of the Data used in this product or service." Guideway bridge/tunnel tags and stations:
 // (c) OpenStreetMap contributors, ODbL. Built into data/ by tools/transit_data.py (format documented there).
 
 import { vancouver, getJSON } from '../../core/util.js'
 
-const DATA = new URL('./data/', import.meta.url)
 const BUS_ZOOM = 0.07 // below this a bus is about a pixel wide: not drawn, its data not fetched
 
 // ---------- data ----------
@@ -77,7 +78,7 @@ function activeAt(ch, tt, bit, fn) {
   }
 }
 
-function fromVancouver(y, mo, d, h, mi) { // wall-clock time in Vancouver -> epoch ms
+function fromLocal(y, mo, d, h, mi) { // wall-clock time in the city -> epoch ms
   const want = Date.UTC(y, mo - 1, d, h, mi)
   let t = want + 8 * 3600e3
   for (let k = 0; k < 2; k++) { const { p } = vancouver(t); t += want - Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) }
@@ -88,7 +89,7 @@ function fromVancouver(y, mo, d, h, mi) { // wall-clock time in Vancouver -> epo
 const C = {
   white: 0xf4f5f2, glass: 0x26323f, dark: 0x3a3f45, blue: 0x0d4ea6, yellow: 0xf5c400, grey: 0x9aa0a6,
   canada: 0x007c9f, purple: 0x6d2a8c, hull: 0x2f4f6f, rapid: 0x4bae4f, concrete: 0xc9c6bd, pier: 0xb9b5ab,
-  canopy: 0xe9eef0, platform: 0xa8a49c, kiosk: 0x5f8fa8,
+  canopy: 0xe9eef0, platform: 0xa8a49c, kiosk: 0x5f8fa8, steel: 0xc3c8cc, mta: 0x1f4fa3,
 }
 // a car: boxes [length (x), height, width (z), x, y (bottom), z, colour, tilt about z]; front is +x, wheels at y 0
 function carGeo(THREE, parts) {
@@ -135,10 +136,15 @@ const KINDS = {
   bus18: { L: 18.3, parts: () => [...bus(18.3), [1.2, 2.6, 2.4, 1.0, 0.45, 0, C.dark]] },
   trolley12: { L: 12.2, parts: () => [...bus(12.2), ...poles(12.2)] },
   trolley18: { L: 18.3, parts: () => [...bus(18.3), [1.2, 2.6, 2.4, 1.0, 0.45, 0, C.dark], ...poles(18.3)] },
+  // New York: stainless subway cars, the numbered lines' narrower 51 ft ones and the lettered lines' 60 ft ones; MTA buses
+  nycA: { L: 15.5, parts: () => [...body(15.5, 3.6, 2.7, { base: C.steel, stripe: C.dark, stripe2: C.steel, win: [0.4, 0.8] }), [15, 0.1, 2.4, 0, 3.6, 0, C.grey]] },
+  nycB: { L: 18.4, parts: () => [...body(18.4, 3.7, 3.05, { base: C.steel, stripe: C.dark, stripe2: C.steel, win: [0.4, 0.8] }), [18, 0.1, 2.7, 0, 3.7, 0, C.grey]] },
+  mta12: { L: 12.2, parts: () => bus(12.2, C.mta, C.mta) },
+  mta18: { L: 18.3, parts: () => [...bus(18.3, C.mta, C.mta), [1.2, 2.6, 2.4, 1.0, 0.45, 0, C.dark]] },
 }
-function bus(L) {
+function bus(L, stripe = C.blue, stripe2 = C.yellow) {
   return [
-    ...body(L, 3.2, 2.55, { floor: 0.45, stripe: C.blue, stripe2: C.yellow, win: [0.42, 0.85] }),
+    ...body(L, 3.2, 2.55, { floor: 0.45, stripe, stripe2, win: [0.42, 0.85] }),
     [L * 0.18, 0.35, 2.3, L * 0.3, 3.2, 0, C.grey], // roof equipment
     ...[-1, 1].flatMap((sd) => [[1.0, 0.9, 0.3, L * 0.33, 0, sd * 1.15, C.dark], [1.0, 0.9, 0.3, -L * 0.28, 0, sd * 1.15, C.dark]]), // wheels
   ]
@@ -160,16 +166,28 @@ function consist(kind, h) {
   return null
 }
 
+// the panel's lines, [show group, label, kind, colour]: Vancouver's; another city's come with its data (man.groups)
+const GROUPS = [
+  ['sky', 'Expo Line', 'expo', '#0033a0'], ['sky', 'Millennium Line', 'millennium', '#ffcd00'], ['sky', 'Canada Line', 'canada', '#007c9f'],
+  ['wce', 'West Coast Express', 'wce', '#87189d'], ['seabus', 'SeaBus', 'seabus', '#746661'],
+  ['bus', 'Buses', 'bus', '#0d4ea6'], ['bus', 'Trolleybuses', 'trolley', '#f5c400'],
+]
+
 export default async function transit(city) {
   const { THREE } = city
+  const name = city.place?.name || 'vancouver'
+  const DATA = new URL(name === 'vancouver' ? './data/' : `./data/${name}/`, import.meta.url)
   const man = await getJSON(new URL('manifest.json', DATA))
+  const groups = man.groups || GROUPS
+  const groupOf = Object.fromEntries(groups.map(([g, , k]) => [k, g]))
+  const LOOK = { deck: man.structure?.deck ?? C.concrete, pier: man.structure?.pier ?? C.pier, platform: man.structure?.platform ?? C.platform }
 
   const { o, ax, az, bx, bz } = localFrame(city, man)
   const routes = man.routes
   const H = (x, z) => city.world.heightAt(x, z)
   let raf = 0, last = 0, force = false, lastView = { x: Infinity, z: 0, mpp: 0 }, ui = null // loop state (see the loop below)
   let speed = 1, anchorSim = Date.now(), anchorReal = performance.now() // clock
-  const show = { sky: true, wce: true, seabus: true, bus: true }
+  const show = Object.fromEntries(groups.map(([g]) => [g, true]))
 
   function prepare(ch) { // world coordinates, lengths and bridge runs per shape
     for (const sh of ch.shapes) {
@@ -211,7 +229,8 @@ export default async function transit(city) {
 
   // ---------- meshes ----------
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true })
-  const cap = { markI: 900, markII: 600, markIII: 600, canada: 160, wceLoco: 12, wceCoach: 80, seabus: 6, bus12: 2500, bus18: 900, trolley12: 500, trolley18: 200 }
+  const cap = { markI: 900, markII: 600, markIII: 600, canada: 160, wceLoco: 12, wceCoach: 80, seabus: 6, bus12: 2500, bus18: 900, trolley12: 500, trolley18: 200,
+    nycA: 2400, nycB: 3200, mta12: 2500, mta18: 900 }
   const meshes = {}
   const group = new THREE.Group()
   group.name = 'transit'
@@ -262,16 +281,16 @@ export default async function transit(city) {
         if (ha || b.hidden) continue
         const lb = b.y - H(b.x, b.z), dx = b.x - xa, dz = b.z - za, L = Math.hypot(dx, dz)
         const elevated = Math.max(la, lb) > 2.5, T = elevated ? 1.5 : 0.45
-        put((xa + b.x) / 2, (ya + b.y) / 2 - T / 2, (za + b.z) / 2, L + 0.6, T, elevated ? 7.6 : 7, Math.atan2(-dz, dx), Math.atan2(b.y - ya, L), elevated ? C.concrete : C.platform)
+        put((xa + b.x) / 2, (ya + b.y) / 2 - T / 2, (za + b.z) / 2, L + 0.6, T, elevated ? 7.6 : 7, Math.atan2(-dz, dx), Math.atan2(b.y - ya, L), elevated ? LOOK.deck : LOOK.platform)
         if (elevated) {
-          put((xa + b.x) / 2, (ya + b.y) / 2 + 0.35, (za + b.z) / 2, L + 0.6, 0.7, 0.35, Math.atan2(-dz, dx), Math.atan2(b.y - ya, L), C.concrete) // centre wall between tracks
+          put((xa + b.x) / 2, (ya + b.y) / 2 + 0.35, (za + b.z) / 2, L + 0.6, 0.7, 0.35, Math.atan2(-dz, dx), Math.atan2(b.y - ya, L), LOOK.deck) // centre wall between tracks
         }
         // piers about every 35 m where the deck is high enough
         for (let d = Math.max(nextPier, s.cum[i]); d < s.cum[i + 1]; d += 35) {
           const p = at(s, d, A), g = H(p.x, p.z), h = p.y - 1.5 - g
           if (h > 2.5 && !p.hidden) {
-            put(p.x, g + h / 2, p.z, 1.5, h, 1.8, Math.atan2(-dz, dx), 0, C.pier)
-            put(p.x, g + h - 0.5, p.z, 1.8, 1.0, 5.2, Math.atan2(-dz, dx), 0, C.pier)
+            put(p.x, g + h / 2, p.z, 1.5, h, 1.8, Math.atan2(-dz, dx), 0, LOOK.pier)
+            put(p.x, g + h - 0.5, p.z, 1.8, 1.0, 5.2, Math.atan2(-dz, dx), 0, LOOK.pier)
           }
           nextPier = d + 35
         }
@@ -290,10 +309,10 @@ export default async function transit(city) {
       const L = st.len, wide = st.kind === 'wce' ? 6 : 13
       const y = p.y, off = st.kind === 'wce' ? 5 : 0
       const ox_ = Math.sin(wyaw) * off, oz_ = Math.cos(wyaw) * off
-      put(p.x + ox_, y - 0.6, p.z + oz_, L, 1.2, wide, wyaw, 0, C.platform) // platforms
+      put(p.x + ox_, y - 0.6, p.z + oz_, L, 1.2, wide, wyaw, 0, LOOK.platform) // platforms
       for (const f of [-0.22, 0, 0.22]) put(p.x + ox_ + Math.cos(wyaw) * L * f, y + 2.4, p.z + oz_ - Math.sin(wyaw) * L * f, 0.5, 4.8, wide * 0.7, wyaw, 0, C.grey)
       put(p.x + ox_, y + 5, p.z + oz_, L * 0.55, 0.45, wide + 1.5, wyaw, 0, C.canopy) // canopy roof over the middle
-      if (p.y - H(p.x, p.z) > 3) { const g = H(p.x, p.z), h = y - 1.2 - g; put(p.x, g + h / 2, p.z, L * 0.5, h, 5, wyaw, 0, C.pier) } // stair/escalator core
+      if (p.y - H(p.x, p.z) > 3) { const g = H(p.x, p.z), h = y - 1.2 - g; put(p.x, g + h / 2, p.z, L * 0.5, h, 5, wyaw, 0, LOOK.pier) } // stair/escalator core
     }
     structs.count = k
     structs.instanceMatrix.needsUpdate = true
@@ -308,7 +327,7 @@ export default async function transit(city) {
   // ---------- clock ----------
   const simNow = () => anchorSim + (performance.now() - anchorReal) * speed
   const setClock = (ms, sp = speed) => { anchorSim = ms; anchorReal = performance.now(); speed = sp; kick(true) }
-  const showOf = (kind) => (kind === 'expo' || kind === 'millennium' || kind === 'canada' ? show.sky : kind === 'bus' || kind === 'trolley' ? show.bus : show[kind])
+  const showOf = (kind) => show[groupOf[kind] ?? kind] !== false
 
   // ---------- per frame ----------
   const P1 = { x: 0, y: 0, z: 0, hidden: false }, P2 = { x: 0, y: 0, z: 0, hidden: false }
@@ -333,7 +352,7 @@ export default async function transit(city) {
     e[i + 12] = (a.x + b.x) / 2 + rx * side; e[i + 13] = (a.y + b.y) / 2; e[i + 14] = (a.z + b.z) / 2 + rz * side; e[i + 15] = 1
     m.count++
   }
-  // the Vancouver clock at sim time ms: formatted once a minute (Intl is slow), counted on to the next
+  // the city's clock at sim time ms: formatted once a minute (Intl is slow), counted on to the next
   const clk = { ms: -Infinity, v: null }
   function clock(ms) {
     let dt = (ms - clk.ms) / 1000
@@ -385,8 +404,8 @@ export default async function transit(city) {
         const sh = ch.shapes[p.shape]
         const h = ((ch.starts[i] * 2654435761) >>> 0) / 4294967296
         let cars, carL, kindOf
-        const cs = consist(r.kind, h)
-        if (cs) { kindOf = cs[0]; cars = cs[1]; carL = KINDS[kindOf].L } else if (r.kind === 'wce') { cars = 7; carL = 25.9 } else { kindOf = (r.kind === 'trolley' ? 'trolley' : 'bus') + (r.artic ? '18' : '12'); cars = 1; carL = KINDS[kindOf].L }
+        const cs = r.cars ? [r.model, r.cars] : consist(r.kind, h) // a route's own train (another city's data), else the line's fleet
+        if (cs) { kindOf = cs[0]; cars = cs[1]; carL = KINDS[kindOf].L } else if (r.kind === 'wce') { cars = 7; carL = 25.9 } else { kindOf = r.model || (r.kind === 'trolley' ? 'trolley' : 'bus') + (r.artic ? '18' : '12'); cars = 1; carL = KINDS[kindOf].L }
         const gap = 0.6, total = cars * carL + (cars - 1) * gap
         const front = Math.min(sh.len, Math.max(total, d + total / 2))
         // lead car on screen? (cheap check before the full placement)
@@ -442,13 +461,8 @@ export default async function transit(city) {
     const atIn = el.querySelector('[data-at]')
     atIn.addEventListener('change', () => {
       const m = /^(\d+)-(\d+)-(\d+)T(\d+):(\d+)/.exec(atIn.value)
-      if (m) setClock(fromVancouver(+m[1], +m[2], +m[3], +m[4], +m[5]))
+      if (m) setClock(fromLocal(+m[1], +m[2], +m[3], +m[4], +m[5]))
     })
-    const groups = [
-      ['sky', 'Expo Line', 'expo', '#0033a0'], ['sky', 'Millennium Line', 'millennium', '#ffcd00'], ['sky', 'Canada Line', 'canada', '#007c9f'],
-      ['wce', 'West Coast Express', 'wce', '#87189d'], ['seabus', 'SeaBus', 'seabus', '#746661'],
-      ['bus', 'Buses', 'bus', '#0d4ea6'], ['bus', 'Trolleybuses', 'trolley', '#f5c400'],
-    ]
     const lines = el.querySelector('[data-lines]')
     lines.innerHTML = groups.map(([g, name, kind, c]) => `<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" data-g="${g}" checked><span style="width:14px;height:6px;border-radius:3px;background:${c}"></span><span style="flex:1">${name}</span><span data-n="${kind}" style="color:var(--muted);font-variant-numeric:tabular-nums"></span></label>`).join('')
     lines.querySelectorAll('[data-g]').forEach((cb) => cb.addEventListener('change', () => {
@@ -473,7 +487,7 @@ export default async function transit(city) {
         pEl.textContent = `${man.patterns[patternOf(man, v.ymd)]} timetable${speed > 1 ? ` · ×${speed}` : ''}`
         for (const [, , k] of groups) {
           const n = byKind[k] || 0
-          el.querySelector(`[data-n="${k}"]`).textContent = k === 'bus' || k === 'trolley' ? (n ? `${n} ${busNote === 'nearby' ? 'nearby' : ''}` : busNote === 'zoom in' ? 'zoom in' : '0') : String(n)
+          el.querySelector(`[data-n="${k}"]`).textContent = groupOf[k] === 'bus' ? (n ? `${n} ${busNote === 'nearby' ? 'nearby' : ''}` : busNote === 'zoom in' ? 'zoom in' : '0') : String(n)
         }
         el.querySelectorAll('[data-s]').forEach((b) => b.setAttribute('aria-pressed', String(+b.dataset.s === speed)))
       },

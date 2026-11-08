@@ -5,6 +5,7 @@ import { Tiles } from './core/tiles.js'
 import { groundMaterial, roadMaterial, buildingMaterial, treeAtlas, treeMaterial, night, surface, occluder } from './core/materials.js'
 import { Trees3D } from './core/trees3d.js'
 import { createQuality } from './core/quality.js'
+import { setTimeZone } from './core/util.js'
 
 // World: metres east (x) and north of an origin downtown (tools/common.py); three.js x = east, y = up, z = south.
 // Heights are real elevations. The camera is orthographic, looking north, 30° down; the view lives in the URL
@@ -71,9 +72,15 @@ sun.shadow.bias = -0.0005
 scene.add(sun, sun.target)
 
 // ---------- the map ----------
+// which city: ?city=<name> opens tiles/<name>/ (baked with CITY=<name>, tools/cities/); Vancouver's are tiles/ itself
+const CITY = (new URLSearchParams(location.search).get('city') || '').toLowerCase().replace(/[^a-z-]/g, '')
+if (CITY && CITY !== 'vancouver') { // no title until its index.json gives one: never Vancouver's on another city
+  document.title = 'Loading…'
+  for (const el of document.querySelectorAll('#bar h1, #loading .title')) el.textContent = ''
+}
 const mats = { ground: groundMaterial(), road: roadMaterial(), paint: roadMaterial(true), building: buildingMaterial(), tree: treeMaterial(treeAtlas()) }
 const tiles = new Tiles({
-  scene, treeScene, mats,
+  scene, treeScene, mats, base: CITY && CITY !== 'vancouver' ? `tiles/${CITY}/` : 'tiles/',
   // shadows follow new tiles at most twice a second; a tile that loads hidden changes neither them nor the picture
   onChange: (shown = true) => { dirty = true; if (shown) { shadowStale = true; trees3d?.changed() } },
   onLoad: (t) => city?.emit('tile:load', tileInfo(t)),
@@ -85,6 +92,17 @@ const tileInfo = (t) => ({ level: t.level, i: t.i, j: t.j, ox: t.ox, oy: t.oy, s
   trees: t.trees ? { pos: t.trees.geometry.attributes.iPos.array, size: t.trees.geometry.attributes.iSize.array } : null })
 status('Loading the map…', 0.05)
 const index = await tiles.init()
+// the city (index.json "city", written by the bake from tools/cities/<city>.py PAGE); Vancouver's own page by default
+const place = { name: 'vancouver', title: 'Vancouver in code', short: 'Vancouver', latlon: [49.2827, -123.1207], tz: 'America/Vancouver', ...index.city }
+setTimeZone(place.tz)
+if (index.city) {
+  document.title = place.title
+  for (const el of document.querySelectorAll('#bar h1, #loading .title')) el.textContent = place.title
+  const about = $('#about')
+  if (place.about) about.querySelector('p').textContent = place.about
+  about.querySelector('p + p').remove() // the isoworld credit is Vancouver's
+  if (place.credits) about.querySelector('ul').innerHTML = place.credits.map((c) => `<li>${c}</li>`).join('')
+}
 const [LAT_O, LON_O] = index.origin, [KX, KY] = index.k
 const ll = (lat, lon) => [(lon - LON_O) * KX, (lat - LAT_O) * KY]
 const zAt = (x, n) => tiles.heightAt(x, n)
@@ -143,7 +161,11 @@ function fromHash() {
   const [x, y, s] = location.hash.slice(1).split(',').map(Number)
   if ([x, y, s].every(Number.isFinite) && s > 0) { setView(x, y, s); return true }
 }
-if (!fromHash()) setView(13312, 10752, mobile && innerWidth < 600 ? 0.05 : 0.07) // downtown and the North Shore
+const small = mobile && innerWidth < 600
+if (!fromHash()) {
+  if (place.start) { const [x, n, z] = place.start; setView(x * K + BX, BY - n * K * VIEW.y, small ? z * 0.7 : z) } // the city's own start: world metres
+  else setView(13312, 10752, small ? 0.05 : 0.07) // downtown and the North Shore
+}
 fit()
 addEventListener('resize', fit)
 addEventListener('hashchange', () => { fromHash(); dirty = true })
@@ -506,6 +528,7 @@ city = createCity({
   suppressBuildings: (ring) => tiles.addMask(ring.map(([lat, lon]) => ll(lat, lon))),
   ownCamera,
   quality,
+  place,
 })
 window.city = city
 // About → Graphics: Auto / High / Low

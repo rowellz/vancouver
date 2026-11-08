@@ -2,13 +2,15 @@
 // A plugin is an ES module whose default export is `(city) => ({ dispose() })` (dispose optional).
 import * as THREE from 'three'
 
-export function createCity({ scene, overlay, camera, renderer, controls, zAt, ll, toLatLon, sun, hemi, setSun, post, requestRender, data, tiles, night, surface, suppressBuildings, ownCamera, quality }) {
+export function createCity({ scene, overlay, camera, renderer, controls, zAt, ll, toLatLon, sun, hemi, setSun, post, requestRender, data, tiles, night, surface, suppressBuildings, ownCamera, quality, place }) {
   const handlers = new Map()
   const own = () => ownCamera?.active
   let animators = 0
   const city = {
     version: 1,
     THREE,
+    // which city this is: { name, title, short, latlon: [lat, lon], tz } (tiles/index.json "city"; Vancouver by default)
+    place,
     scene, // everything in here gets the ink outlines and shadows
     // graphics quality (core/quality.js): tier.name 'high' | 'low' and its knobs (life, weather: shares of the
     // particles / agents to draw, detail, …); city.on('quality', tier) when it changes
@@ -213,9 +215,10 @@ function makeUI() {
   }
 }
 
-// Plugins listed in plugins/index.json, plus ?plugin=<path> for local development (same origin only).
+// Plugins listed in plugins/index.json (or the city's own list, city.place.plugins), plus ?plugin=<path> for local
+// development (same origin only).
 export async function loadPlugins(city) {
-  const list = await fetch('plugins/index.json').then((r) => r.json()).catch(() => [])
+  const list = city.place?.plugins ? [...city.place.plugins] : await fetch('plugins/index.json').then((r) => r.json()).catch(() => [])
   for (const p of new URLSearchParams(location.search).getAll('plugin')) {
     const u = new URL(p, location.href)
     if (u.origin === location.origin) list.push(u.pathname)

@@ -1,7 +1,8 @@
 # Step 3: the map tiles. For every 4096 m tile with data, writes sixteen 1024 m detail tiles (public/tiles/0/)
 # and one 4096 m medium tile (public/tiles/1/), each a small gzipped binary the page streams in as you look
 # around. Format: Out below, read by parse() in public/core/tile-worker.js. Inputs: data/feat (osm_split.py), data/hr (hrdem.py),
-# data/sea.npz (sea.py), City of Vancouver trees + 2009 LiDAR sections, MRDEM where HRDEM has no data.
+# data/sea.npz (sea.py), the city's trees (and Vancouver's 2009 LiDAR sections), its coarse DEM where the LiDAR has no data.
+# The city: CITY=<name> (tools/cities/), its inputs in DATA, its tiles in OUT (default public/tiles[/<city>]).
 # Run: uv run --with numpy,scipy,pillow,shapely,rasterio python3 tools/tiles.py [procs] [i_j ...]
 import csv, gzip, json, math, os, pickle, random, struct, sys, time
 from multiprocessing import Pool
@@ -12,11 +13,11 @@ from shapely.ops import unary_union
 from PIL import Image, ImageDraw
 from scipy import ndimage
 sys.path.insert(0, os.path.dirname(__file__))
-from common import GROUND, GI, xy, extent, L0, L1, KX, KY, LAT_O, LON_O, HR, KINDS, KI, DRIVE, SHOP_AMENITY, line_kind, hnum, densify, all_tiles, HR_CACHE, hr_lookup, tile_args, load_feat
+from common import GROUND, GI, xy, extent, L0, L1, KX, KY, LAT_O, LON_O, HR, KINDS, KI, DRIVE, SHOP_AMENITY, line_kind, hnum, densify, all_tiles, HR_CACHE, hr_lookup, tile_args, load_feat, DATA, TILES, CITY, city
 from roofs import roof_lookup
 from facades import facade_lookup, NONE as B_NONE, GLASS as B_GLASS, SOLID as B_SOLID
 
-OUT = os.environ.get('OUT', 'public/tiles')
+OUT = os.environ.get('OUT', TILES)
 VERSION = 2
 
 
@@ -87,13 +88,14 @@ class Out:
 
 # ---------------------------------------------------------------- shared inputs (loaded in the parent; children fork)
 EX = extent()
-SEA = np.load('data/sea.npz')
+SEA = np.load(f'{DATA}/sea.npz')
 SEA_M, SEA_X0, SEA_Y1, SEA_C = SEA['sea'].astype(bool), float(SEA['x0']), float(SEA['y1']), float(SEA['cell'])
 
 
 def mrdem_grid():
-    """MRDEM 30 m for the whole map, sampled on a 32 m world grid (fallback where HRDEM has no data)"""
-    path = 'data/mrdem32.npz'
+    """the city's coarse DEM (DEM_FALLBACK: MRDEM 30 m in Vancouver) for the whole map, sampled on a 32 m world grid
+    (fallback where the LiDAR has no data)"""
+    path = f'{DATA}/mrdem32.npz'
     if os.path.exists(path):
         d = np.load(path); return d['z'], float(d['x0']), float(d['y1'])
     import rasterio
@@ -103,8 +105,10 @@ def mrdem_grid():
     w, h = int((x1 - x0) / c) + 2, int((y1 - y0) / c) + 2
     tr = Affine((c / KX), 0, LON_O + x0 / KX, 0, -(c / KY), LAT_O + y1 / KY)
     z = np.full((h, w), np.nan, np.float32)
-    with rasterio.open('/vsicurl/https://canelevation-dem.s3.ca-central-1.amazonaws.com/mrdem-30/mrdem-30-dtm.tif') as src:
+    url, zscale = city.DEM_FALLBACK
+    with rasterio.open(url) as src:
         reproject(rasterio.band(src, 1), z, src_nodata=src.nodata, dst_transform=tr, dst_crs='EPSG:4326', dst_nodata=np.nan, resampling=Resampling.bilinear)
+    z *= zscale
     np.savez_compressed(path, z=z, x0=x0, y1=y1)
     return z, x0, y1
 
@@ -112,31 +116,8 @@ def mrdem_grid():
 MR, MR_X0, MR_Y1 = mrdem_grid()
 
 
-def city_trees():
-    """City of Vancouver public trees: (x, y, genus, species, height)"""
-    out = []
-    with open('data/trees.csv', encoding='utf-8-sig') as fh:
-        for row in csv.DictReader(fh, delimiter=';'):
-            try: lat, lon = map(float, row['geo_point_2d'].split(','))
-            except ValueError: continue
-            x, y = xy(lat, lon)
-            out.append((x, y, row['genus_name'], row['common_name'], float(row['height_m'] or 0) or 8.0))
-    return out
-
-
-def lidar_sections():
-    out = []
-    for f in json.load(open('data/bf2009.geojson'))['features']:
-        p = f['properties']; geo = f['geometry']
-        polys = geo['coordinates'] if geo['type'] == 'MultiPolygon' else [geo['coordinates']] if geo['type'] == 'Polygon' else []
-        for poly in polys:
-            r = [xy(b, a) for a, b in poly[0]]
-            if len(r) >= 4 and (p.get('hgt_agl') or 0) >= 2: out.append((r, p['hgt_agl'], (p.get('rooftype') or '').lower()))
-    return out
-
-
-TREES = city_trees()
-SECTIONS = lidar_sections()
+TREES = city.trees(DATA)  # the city's tree inventory: (x, y, genus, common name, height)
+SECTIONS = city.sections(DATA)  # vector-exact building sections, where a city has them: (ring, height, roof type)
 print('inputs ready', len(TREES), 'city trees', len(SECTIONS), 'lidar sections', flush=True)
 
 
@@ -181,7 +162,7 @@ def build(ij):
     X0, Y0 = i * L1, j * L1
     # rasters on the tile's 2 m grid (row 0 = north)
     N = int(L1 / HR)
-    hp = f'data/hr/{i}_{j}.npz'
+    hp = f'{DATA}/hr/{i}_{j}.npz'
     dsm = dtm = None
     if os.path.exists(hp):
         d = np.load(hp)
@@ -431,13 +412,8 @@ COLOURS = {'white': 0xf2f0ea, 'black': 0x303236, 'grey': 0x9a9c9e, 'gray': 0x9a9
            'blue': 0x5a80b0, 'green': 0x5a8a5a, 'silver': 0xc0c4c8, 'tan': 0xc8b090, 'cream': 0xeee4cc, 'orange': 0xd08040, 'darkgrey': 0x5a5c60,
            'lightgrey': 0xc8cacc, 'maroon': 0x7a2a2a, 'pink': 0xe0a8a8, 'teal': 0x4a9a9a}
 # rough outlines in world metres (common.py) of places whose building stock has a look of its own; first match wins
-ZONES = [
-    ('historic', Polygon([(-230, -60), (350, -60), (1300, -250), (1300, -560), (720, -560), (700, -1000), (250, -800), (-120, -480), (-300, -260)])),  # Gastown, Victory Sq, Chinatown, Railtown: 1890s-1920s brick
-    ('historic', Polygon([(-629, -872), (-491, -988), (-871, -1448), (-1009, -1332)])),  # Yaletown's warehouse district
-    ('granville', Polygon([(-2200, -1880), (-1450, -1880), (-1450, -1430), (-2200, -1430)])),  # Granville Island: tin sheds
-    ('westend', Polygon([(-880, -182), (-1703, -1006), (-1803, -1115), (-2306, -408), (-2700, 200), (-2100, 950), (-1784, 825)])),  # 1960s-70s concrete towers
-    ('core', Polygon([(-2900, 1300), (400, 300), (400, -500), (-200, -1400), (-1200, -1750), (-2700, -300)])),  # downtown, Coal Harbour, Yaletown: glass condos
-]
+# (the city's ZONES, tools/cities/<city>.py)
+ZONES = [(k, Polygon(pts)) for k, pts in city.ZONES]
 
 
 def zone(c):
@@ -680,8 +656,10 @@ def from_lidar(r, a, z, ok, fx, shape, rnd, roofm):
 
 def house_kind(info, main):
     """Vancouver's two classic houses, told apart by their roofs: the character house (1900s-1930s, steep gables, wood
-    siding, a porch) and the Vancouver Special (1965-85, two storeys, a shallow gable, stucco over a brick base)"""
+    siding, a porch) and the Vancouver Special (1965-85, two storeys, a shallow gable, stucco over a brick base).
+    A city of row houses (HOUSES_KIND 'rowhouse': Manhattan's brownstones and brick town houses) has brick ones."""
     btype, a = info['btype'], info['a']
+    if city.HOUSES_KIND == 'rowhouse': return BRICK if btype in HOUSES and main['h'] <= 20 else None
     if not (btype in HOUSES or btype == 'yes' and 60 < a < 400) or main['h'] > 11: return None
     year = info['year']
     if year and year < 1940: return CHARACTER
@@ -715,15 +693,15 @@ def style_of(info, h, rnd, kind):
         or info['fac'].get('heritage') and (year or 0) < 1940  # on the city's register (it lists modernist ones too)
     if heritage and btype not in HOUSES and h < 45:
         return STONE if btype in ('civic', 'public', 'government', 'cathedral') or t.get('amenity') in ('bank', 'townhall', 'courthouse', 'place_of_worship') else BRICK
-    if zn == 'historic' and h < 32 and btype not in HOUSES and rnd.random() < 0.8: return BRICK
+    if zn in city.BRICK_ZONES and h < city.BRICK_ZONES[zn][0] and btype not in HOUSES and rnd.random() < city.BRICK_ZONES[zn][1]: return BRICK
     s = STYLE.get(btype)
-    if zn == 'granville' and h < 16 and s in (None, COMM, SHED, BIGBOX): return SHED
+    if zn and zn == city.SHEDS_ZONE and h < 16 and s in (None, COMM, SHED, BIGBOX): return SHED
     if s == SHED or info['ind'] and a > 300 and h < 20 and s in (None, COMM): return SHED
     if (btype in ('retail', 'commercial', 'supermarket') or t.get('shop') in ('mall', 'supermarket', 'department_store', 'doityourself', 'wholesale')) and a > 2500 and h < 16:
         return BIGBOX
     if s is None: s = HOUSE if h < 9 else APT if h > 14 else COMM
     if s == APT and h > 24 and btype != 'hotel':
-        p = {'core': 0.9, 'westend': 0.2}.get(zn, 0.55)
+        p = city.GLASS_P.get(zn, city.GLASS_P[None])
         if year: p = 0.0 if year < 1985 else 1.0 if year >= 1995 else p
         return GLASS if rnd.random() < p else CONCRETE
     if s == OFFICE and year and year < 1975: return CONCRETE
@@ -856,7 +834,7 @@ def buildings(items, dsm, dtm, X0, Y0, rnd, under=None, shops=None, ind=None, st
         # is the sky in it), else the palette
         wall = colour(t.get('building:colour'))
         if not wall and fac.get('wall') and (fac['wsrc'] == 2 or style not in (GLASS, OFFICE)): wall = fac['wall'] | 0x1000000
-        if not wall and info['zone'] == 'granville' and style == SHED:  # Granville Island's painted tin
+        if not wall and info['zone'] and info['zone'] == city.SHEDS_ZONE and style == SHED:  # Granville Island's painted tin
             wall = rnd.choice((0xb84a3a, 0xd8a838, 0x3a6a9a, 0x4a7a5a, 0x8a8c8e, 0xc86a3a, 0x5a8aa0)) | 0x1000000
         res = info['btype'] != 'hotel' and (style in (APT, GLASS) or style == CONCRETE and info['btype'] in RESID and top > 24)
         fx = facade_fx(style, res, top, info['year'], info['btype'], fac, main['ring'])
@@ -1205,7 +1183,7 @@ def road_pieces(items, dsm, dtm, X0, Y0, own=True):
 # Sidewalks and cycle decks mapped beside a road deck take that deck's height; a long bridge the LiDAR does not have
 # yet (stal̕əw̓asəm, 2024) or one under the trees spans between its abutments. Cached in data/decks<version>.pkl.
 DECK_VERSION = 3
-DECK_CACHE = f'data/decks{DECK_VERSION}.pkl'
+DECK_CACHE = f'{DATA}/decks{DECK_VERSION}.pkl'
 GRADE = 0.07  # steepest deck grade kept, rise per metre
 FOOT = {'footway', 'cycleway', 'path', 'pedestrian', 'steps', 'track'}
 DECKS = None
@@ -1283,7 +1261,7 @@ def deck_profiles():
     global DECKS
     if DECKS is not None: return DECKS
     import glob
-    files = sorted(glob.glob('data/feat/*.pkl'))
+    files = sorted(glob.glob(f'{DATA}/feat/*.pkl'))
     key = (DECK_VERSION, max((os.path.getmtime(f) for f in files), default=0))
     if os.path.exists(DECK_CACHE):
         d = pickle.load(open(DECK_CACHE, 'rb'))
@@ -1667,7 +1645,7 @@ def safe_build(ij):
 def write_index():
     ls = lambda lv: sorted(f[:-4] for f in os.listdir(f'{OUT}/{lv}') if f.endswith('.bin')) if os.path.isdir(f'{OUT}/{lv}') else []
     json.dump({'version': VERSION, 'origin': [LAT_O, LON_O], 'k': [KX, KY], 'extent': EX, 'sizes': [L0, L1], 'ground': GROUND, 'kinds': KINDS,
-               'l0': ls(0), 'l1': ls(1), 'built': int(time.time())}, open(f'{OUT}/index.json', 'w'))
+               'l0': ls(0), 'l1': ls(1), 'built': int(time.time()), **({'city': city.PAGE} if city.PAGE else {})}, open(f'{OUT}/index.json', 'w'))
 
 def selftest():
     """synthetic LiDAR: a gable whose ridge runs across the footprint, a hip, a shed, and a tower on a podium"""

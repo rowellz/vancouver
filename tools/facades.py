@@ -14,13 +14,13 @@ import csv, glob, json, math, os, struct, sys, time
 from multiprocessing import Pool
 import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
-from common import xy, latlon, L1, save_rings, load_feat
+from common import xy, latlon, L1, save_rings, load_feat, DATA
 from roofs import ring_db, ring_match
 
-OUT = 'data/facades.npz'
-SRC = 'data/facades'
-LAS = 'data/lidar2022/las'
-MLY = 'data/mapillary/walls.npz'  # tools/mapillary.py
+OUT = f'{DATA}/facades.npz'
+SRC = f'{DATA}/facades'
+LAS = f'{DATA}/lidar2022/las'
+MLY = f'{DATA}/mapillary/walls.npz'  # tools/mapillary.py
 CITY = (-3, 1, -3, 0)  # the 4 km feature buckets (i0, i1, j0, j1) that cover the City of Vancouver and UBC
 NONE, GLASS, SOLID = 1, 2, 3  # balcony kinds (0: tiles.py's rules decide)
 

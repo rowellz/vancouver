@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""TransLink GTFS (+ OSM SkyTrain guideways) -> compact files for public/plugins/transit/data/.
+"""A city's GTFS (+ OSM guideways) -> compact files for public/plugins/transit/data/ (Vancouver: TransLink, SkyTrain;
+CITY=<city>: its TRANSIT feeds, tools/cities/<city>.py, into public/plugins/transit/data/<city>/).
 
-    uv run --with shapely,numpy python3 tools/transit_data.py [google_transit.zip] [lm.osm.pbf]
+    [CITY=<city>] uv run --with shapely,numpy python3 tools/transit_data.py [gtfs.zip] [lm.osm.pbf]
 
-Without a zip it downloads https://gtfs-static.translink.ca/gtfs/google_transit.zip. Needs the `osmium` CLI.
+Without a zip it downloads the city's feeds (TRANSIT['feeds']; several are merged, their ids prefixed). Needs the
+`osmium` CLI. A feed without shape_dist_traveled has its stops placed along their shapes.
 
 Data: "Route and arrival data used in this product or service is provided by permission of TransLink. TransLink
 assumes no responsibility for the accuracy or currency of the Data used in this product or service." (TransLink
@@ -28,21 +30,18 @@ import shapely
 from shapely.geometry import LineString
 from shapely.strtree import STRtree
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import LAT_O, LON_O, KX, KY, xy
+from common import LAT_O, LON_O, KX, KY, xy, city, CITY, DATA, extent
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, 'public/plugins/transit/data')
-FEED = 'https://gtfs-static.translink.ca/gtfs/google_transit.zip'
-PBF = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(ROOT), 'vancouver/data/lm.osm.pbf')
+CFG = city.TRANSIT  # the city's feeds, kinds of line, stations and credit (tools/cities/<city>.py)
+OUT = os.path.join(ROOT, 'public/plugins/transit/data' + ('' if CITY == 'vancouver' else f'/{CITY}'))
+PBF = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, DATA, 'lm.osm.pbf')
+UNIT = CFG['dist_unit']  # metres per shape_dist_traveled unit, None: the feed has none
 ORIGIN, K, P = (LAT_O, LON_O), (KX, KY), xy  # the map's frame (common.py): metres per degree lon, lat
 Q = 0.5  # position step, m
 CELL = 8000  # bus chunk size, m
 
-# Vancouver's trolleybus routes (Wikipedia "Trolleybuses in Vancouver", checked 2026-11; route 9 runs diesel while
-# Broadway is dug up). Articulated: B-Line/RapidBus and the busiest diesel routes; E60 artic trolleys on 3/8/20/41.
-# ponytail: per-route guess, TransLink publishes no per-trip vehicle type
-TROLLEY = {'3', '4', '5', '6', '7', '8', '10', '14', '16', '17', '19', '20', '41'}
-ARTIC = {'99', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6', '25', '49', '145', '319', '323', '502', '503', '555', '3', '8', '20', '41'}
+IDS = ('route_id', 'trip_id', 'shape_id', 'service_id', 'stop_id', 'parent_station')  # prefixed per feed when merging
 
 
 def zz(v): return (v << 1) ^ (v >> 63)
@@ -61,6 +60,32 @@ class Out:
 def rows(z, name):
     with z.open(name) as f:
         yield from csv.DictReader(io.TextIOWrapper(f, 'utf-8-sig'))
+
+
+def rows_all(zs, name, need=True):
+    """a table from every feed, ids prefixed with the feed's key ('' for one feed: as they are)"""
+    for pre, z in zs:
+        if name not in z.namelist():
+            if need: raise KeyError(f'{name} missing')
+            continue
+        for r in rows(z, name):
+            if pre:
+                for k in IDS:
+                    if r.get(k): r[k] = f'{pre}:{r[k]}'
+            yield r
+
+
+def project_stops(line, pts):
+    """metres along `line` of each point, never going back (a loop's second pass is looked for ahead)"""
+    from shapely.ops import substring
+    out, prev = [], 0.0
+    for p in pts:
+        g = shapely.Point(p); d = line.project(g)
+        if d < prev - 1:
+            sub = substring(line, prev, line.length)
+            d = prev + sub.project(g) if sub.length > 0 else prev
+        prev = max(d, prev); out.append(prev)
+    return np.array(out)
 
 
 def secs(t):
@@ -140,73 +165,83 @@ def osm_lines(filters, tag_test):
 
 
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else None
-    if not src:
-        src = os.path.join(tempfile.mkdtemp(), 'gtfs.zip'); print('downloading', FEED); urllib.request.urlretrieve(FEED, src)
-    z = zipfile.ZipFile(src)
-    feed = next(rows(z, 'feed_info.txt'))
+    if len(sys.argv) > 1: zs = [(CFG['feeds'][0][0], zipfile.ZipFile(sys.argv[1]))]
+    else:
+        zs = []
+        for pre, url in CFG['feeds']:
+            src = os.path.join(tempfile.mkdtemp(), 'gtfs.zip'); print('downloading', url); urllib.request.urlretrieve(url, src)
+            zs.append((pre, zipfile.ZipFile(src)))
+    infos = [next(rows(z, 'feed_info.txt')) for _, z in zs]
+    feed = {'feed_version': ' + '.join(f['feed_version'] for f in infos), 'feed_start_date': min(f['feed_start_date'] for f in infos),
+            'feed_end_date': max(f['feed_end_date'] for f in infos)}
 
     # ---------- day patterns ----------
-    trips = [t for t in rows(z, 'trips.txt')]
-    routes = {r['route_id']: r for r in rows(z, 'routes.txt') if r['route_type'] in ('1', '2', '3', '4')}
+    trips = [t for t in rows_all(zs, 'trips.txt')]
+    routes = {r['route_id']: r for r in rows_all(zs, 'routes.txt') if r['route_type'] in ('1', '2', '3', '4')}
     trips = [t for t in trips if t['route_id'] in routes]
+    if CFG['clip']:  # only trips whose route reaches the map (a feed for a whole region)
+        X0, Y0, X1, Y1 = extent(); pad = 1000
+        box_ = {}
+        for r in rows_all(zs, 'shapes.txt'):
+            x, n = P(float(r['shape_pt_lat']), float(r['shape_pt_lon'])); b = box_.get(r['shape_id'])
+            box_[r['shape_id']] = (min(b[0], x), min(b[1], n), max(b[2], x), max(b[3], n)) if b else (x, n, x, n)
+        on = {k for k, (a, b, c, d) in box_.items() if c > X0 - pad and a < X1 + pad and d > Y0 - pad and b < Y1 + pad}
+        n0 = len(trips); trips = [t for t in trips if t.get('shape_id') in on]
+        print('clipped to the map:', len(trips), 'of', n0, 'trips')
     tcount = collections.Counter(t['service_id'] for t in trips)
-    cal = {r['service_id']: r for r in rows(z, 'calendar.txt')}
+    cal = {r['service_id']: r for r in rows_all(zs, 'calendar.txt')}
     exc = collections.defaultdict(dict)
-    for r in rows(z, 'calendar_dates.txt'): exc[r['date']][r['service_id']] = r['exception_type']
+    for r in rows_all(zs, 'calendar_dates.txt', need=False): exc[r['date']][r['service_id']] = r['exception_type']
     D = lambda s: datetime.date(int(s[:4]), int(s[4:6]), int(s[6:]))
-    d0, d1 = D(feed['feed_start_date']), D(feed['feed_end_date'])
     DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-    active = {}
-    d = d0
-    while d <= d1:
-        k = d.strftime('%Y%m%d')
-        s = {sid for sid, c in cal.items() if c[DAYS[d.weekday()]] == '1' and c['start_date'] <= k <= c['end_date']}
-        for sid, e in exc[k].items(): (s.add if e == '1' else s.discard)(sid)
-        active[k] = frozenset(x for x in s if tcount[x]); d += datetime.timedelta(1)
     default = lambda k: [0, 0, 0, 0, 1, 2, 3][D(k).weekday()]
-    reps = []
-    for p in range(4):
-        c = collections.Counter(s for k, s in active.items() if default(k) == p)
-        reps.append(c.most_common(1)[0][0])
     diff = lambda a, b: sum(tcount[x] for x in a ^ b)
-    special = {}
-    for k, s in active.items():
-        p = min(range(4), key=lambda p: (diff(s, reps[p]), p != default(k)))
-        if p != default(k): special[k] = p
+    reps, special = [frozenset()] * 4, {}
+    for (pre, _), info in zip(zs, infos):  # each feed by itself (feeds can cover different dates), then merged
+        mine = (lambda sid: sid.startswith(pre + ':')) if pre else (lambda sid: True)
+        active = {}
+        d, d1 = D(info['feed_start_date']), D(info['feed_end_date'])
+        while d <= d1:
+            k = d.strftime('%Y%m%d')
+            s = {sid for sid, c in cal.items() if mine(sid) and c[DAYS[d.weekday()]] == '1' and c['start_date'] <= k <= c['end_date']}
+            for sid, e in exc[k].items():
+                if mine(sid): (s.add if e == '1' else s.discard)(sid)
+            active[k] = frozenset(x for x in s if tcount[x]); d += datetime.timedelta(1)
+        fr = []
+        for p in range(4):
+            c = collections.Counter(s for k, s in active.items() if default(k) == p)
+            fr.append((c.most_common(1) or [(frozenset(), 0)])[0][0])
+        for k, s in active.items():
+            p = min(range(4), key=lambda p: (diff(s, fr[p]), p != default(k)))
+            if p != default(k): special.setdefault(k, p)
+        reps = [r | f for r, f in zip(reps, fr)]
     print('patterns', [sorted(r) for r in reps], 'special days', special)
     trips = [dict(t, mask=sum(1 << p for p in range(4) if t['service_id'] in reps[p])) for t in trips]
     trips = [t for t in trips if t['mask']]
     tids = {t['trip_id'] for t in trips}
 
     # ---------- routes ----------
-    def kind(r):
-        n = r['route_long_name']
-        if r['route_type'] == '1': return {'Expo Line': 'expo', 'Millennium Line': 'millennium', 'Canada Line': 'canada'}[n]
-        if r['route_type'] == '2': return 'wce'
-        if r['route_type'] == '4': return 'seabus'
-        return 'trolley' if r['route_short_name'].lstrip('0') in TROLLEY else 'bus'
     used = sorted({t['route_id'] for t in trips}, key=lambda r: (routes[r]['route_type'] == '3', routes[r]['route_short_name'].lstrip('0').rjust(4)))
     RI = {r: i for i, r in enumerate(used)}
     rmeta = []
     for r in used:
         x = routes[r]; short = x['route_short_name'].lstrip('0')
-        rmeta.append({'name': short or x['route_long_name'], 'long': x['route_long_name'], 'kind': kind(x),
-                      'artic': short in ARTIC, 'color': '#' + (x['route_color'] or ('87189d' if x['route_type'] == '2' else '746661' if x['route_type'] == '4' else ''))})
+        rmeta.append({'name': short or x['route_long_name'], 'long': x['route_long_name'], 'kind': CFG['kind'](x),
+                      **CFG['route'](x, short), 'color': '#' + CFG['color'](x)})
     rail_routes = {r for r in used if routes[r]['route_type'] != '3'}
 
     # ---------- stop times ----------
-    stops = {s['stop_id']: s for s in rows(z, 'stops.txt')}
+    stops = {s['stop_id']: s for s in rows_all(zs, 'stops.txt')}
     st = collections.defaultdict(list)
-    for r in rows(z, 'stop_times.txt'):
+    for r in rows_all(zs, 'stop_times.txt'):
         if r['trip_id'] in tids:
             st[r['trip_id']].append((int(r['stop_sequence']), secs(r['arrival_time']), secs(r['departure_time']),
-                                     float(r['shape_dist_traveled'] or 0), r['timepoint'] == '1', r['stop_id']))
+                                     float(r.get('shape_dist_traveled') or 0), r.get('timepoint', '1') == '1', r['stop_id']))
     shp = collections.defaultdict(list)
     need = {t['shape_id'] for t in trips}
-    for r in rows(z, 'shapes.txt'):
+    for r in rows_all(zs, 'shapes.txt'):
         if r['shape_id'] in need:
-            shp[r['shape_id']].append((int(r['shape_pt_sequence']), float(r['shape_pt_lat']), float(r['shape_pt_lon']), float(r['shape_dist_traveled'] or 0)))
+            shp[r['shape_id']].append((int(r['shape_pt_sequence']), float(r['shape_pt_lat']), float(r['shape_pt_lon']), float(r.get('shape_dist_traveled') or 0)))
 
     # ---------- OSM: SkyTrain structure, road bridges/tunnels, stations ----------
     def rail_cls(t):
@@ -226,8 +261,7 @@ def main():
         return None
     road_ways = osm_lines(['w/bridge=yes,viaduct', 'w/tunnel=yes,building_passage'], road_cls)
     rail_tree, road_tree = STRtree([w[0] for w in rail_ways]), STRtree([w[0] for w in road_ways])
-    stn = osm_lines(['n/railway=station'], lambda t: 'sky' if t.get('station') == 'subway' and t.get('network') == 'TransLink'
-                    else 'wce' if t.get('train') == 'yes' and t.get('network') == 'TransLink' else None)
+    stn = osm_lines(['n/railway=station'], CFG['station'])
     print('osm', len(rail_ways), 'rail ways', len(road_ways), 'road bridges/tunnels', len(stn), 'stations')
 
     # ---------- shapes ----------
@@ -236,7 +270,11 @@ def main():
     shapes = {}  # shape_id -> dict(pts=[(x, n)], code=[...], orig=[km], cum=[m])
     for sid, raw in shp.items():
         raw.sort()
-        pts = [(*P(la, lo), dk * 1000) for _, la, lo, dk in raw]
+        if UNIT: pts = [(*P(la, lo), dk * UNIT) for _, la, lo, dk in raw]
+        else:  # no shape_dist_traveled: metres along the shape itself (stops are projected onto it, `along`)
+            pts, acc = [], 0.0
+            for k, (_, la, lo, _) in enumerate(raw):
+                p = P(la, lo); acc += math.dist(p, pts[-1][:2]) if pts else 0.0; pts.append((*p, acc))
         rail = shape_route[sid] in rail_routes
         sky = routes[shape_route[sid]]['route_type'] == '1'
         if rail:
@@ -310,6 +348,18 @@ def main():
         shapes[sid] = dict(q=qp, code=code, orig=np.array([p[2] for p in pts]), cum=qcum,
                            bbox=(qa[:, 0].min(), qa[:, 1].min(), qa[:, 0].max(), qa[:, 1].max()))
 
+    # ---------- where each stop is along its shape ----------
+    proj = {}
+    def along(sts, sid):
+        """metres along shape sid (its quantised length) of each of the stop times sts"""
+        sh = shapes[sid]
+        if UNIT: return np.interp([x[3] * UNIT for x in sts], sh['orig'], sh['cum'])
+        key = (sid, tuple(x[5] for x in sts))
+        if key not in proj:
+            if 'line' not in sh: sh['line'] = LineString(np.array(sh['q'], float) * Q)
+            proj[key] = project_stops(sh['line'], [P(float(stops[x[5]]['stop_lat']), float(stops[x[5]]['stop_lon'])) for x in sts])
+        return proj[key]
+
     # ---------- stop patterns, timing profiles, trips ----------
     groups = collections.defaultdict(list)  # chunk -> trips
     route_mid = {}
@@ -332,8 +382,7 @@ def main():
             if len(sts) < 2: continue
             sh = shapes[t['shape_id']]
             if not rail: sts = [x for i, x in enumerate(sts) if x[4] or i == 0 or i == len(sts) - 1]
-            dist = np.interp([x[3] * 1000 for x in sts], sh['orig'], sh['cum'])
-            dist = np.maximum.accumulate(np.round(dist))
+            dist = np.maximum.accumulate(np.round(along(sts, t['shape_id'])))
             pk = (RI[t['route_id']], SI[t['shape_id']], tuple(int(v) for v in dist))
             pi = pats.setdefault(pk, len(pats))
             t0 = sts[0][1]
@@ -407,25 +456,26 @@ def main():
         px, pn = line.interpolate(sa).coords[0]
         stations.append({'name': t.get('name', ''), 'x': round(px, 1), 'n': round(pn, 1), 'dir': round(math.atan2(bn - an, bx - ax), 3),
                          'shape': rail_sids.index(s), 's': round(sa, 1), 'kind': k,
-                         'len': 50 if routes[shape_route[s]]['route_long_name'] == 'Canada Line' else 120 if k == 'wce' else 80})
+                         'len': CFG['platform'](routes[shape_route[s]], k)})
     print(len(stations), 'stations', len(guide_out), 'guideway runs')
 
     manifest = {
-        'credit': 'Route and arrival data used in this product or service is provided by permission of TransLink. TransLink assumes no responsibility for the accuracy or currency of the Data used in this product or service.',
+        'credit': CFG['credit'],
         'feed': {k: feed[k] for k in ('feed_version', 'feed_start_date', 'feed_end_date')},
         'origin': ORIGIN, 'k': K, 'q': Q,
         'patterns': ['Mon–Thu', 'Friday', 'Saturday', 'Sunday/holiday'], 'special': special,
         'routes': rmeta, 'chunks': chunks, 'guide': guide_out, 'stations': stations,
+        **(CFG['page'] or {}),  # another city's legend, looks and pattern names for the page
     }
     json.dump(manifest, open(os.path.join(OUT, 'manifest.json'), 'w'), separators=(',', ':'), ensure_ascii=False)
-    write_lines(trips, rail_routes, RI, rmeta, st, shapes, stops)
+    write_lines(trips, rail_routes, RI, rmeta, st, shapes, stops, along)
     print('total', sum(c['bytes'] for c in chunks) + os.path.getsize(os.path.join(OUT, 'manifest.json')), 'bytes')
 
 
 BOUND = ('Northbound ', 'Southbound ', 'Eastbound ', 'Westbound ')
 
 
-def write_lines(trips, rail_routes, RI, rmeta, st, shapes, stops):
+def write_lines(trips, rail_routes, RI, rmeta, st, shapes, stops, along):
     """Every bus route's usual pattern each way, all its stops and its timetable (see the docstring)."""
     out = os.path.join(OUT, 'lines')
     os.makedirs(out, exist_ok=True)
@@ -439,7 +489,7 @@ def write_lines(trips, rail_routes, RI, rmeta, st, shapes, stops):
         key = collections.Counter(pat(t) for t in ts).most_common(1)[0][0]
         mine = [t for t in ts if pat(t) == key]
         sh, s0 = shapes[key[0]], sorted(st[mine[0]['trip_id']])
-        dist = np.maximum.accumulate(np.round(np.interp([x[3] * 1000 for x in s0], sh['orig'], sh['cum'])))
+        dist = np.maximum.accumulate(np.round(along(s0, key[0])))
         head = collections.Counter(t['trip_headsign'] for t in mine).most_common(1)[0][0]
         name = rmeta[ri]['name']
         if head.split(' ')[0].lstrip('0') == name: head = head.split(' ', 1)[1] if ' ' in head else head
@@ -447,7 +497,7 @@ def write_lines(trips, rail_routes, RI, rmeta, st, shapes, stops):
         for x, v in zip(s0, dist):
             n = stops[x[5]]['stop_name'].strip()
             for b in BOUND: n = n[len(b):] if n.startswith(b) else n
-            names.append([n, stops[x[5]]['stop_code'], int(v)])
+            names.append([n, stops[x[5]].get('stop_code', ''), int(v)])
         profs, rows = {}, []
         for t in mine:
             s = sorted(st[t['trip_id']])

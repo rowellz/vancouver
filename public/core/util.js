@@ -60,8 +60,11 @@ export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(
 // fetch JSON, failing on an HTTP error rather than parsing its page
 export const getJSON = (url) => fetch(url).then((r) => { if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`); return r.json() })
 
-// Vancouver wall-clock time at epoch ms: { ymd: 'YYYYMMDD', sec: seconds since local midnight, wd: 'Mon', hm: 'HH:MM', p: the parts }
-const FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Vancouver', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', weekday: 'short' })
+// The city's wall-clock time at epoch ms (Vancouver's, or the city's own: setTimeZone, from tiles/index.json):
+// { ymd: 'YYYYMMDD', sec: seconds since local midnight, wd: 'Mon', hm: 'HH:MM', p: the parts }
+const fmt = (timeZone) => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', weekday: 'short' })
+let FMT = fmt('America/Vancouver')
+export function setTimeZone(tz) { FMT = fmt(tz) }
 export function vancouver(ms) {
   const p = {}
   for (const { type, value } of FMT.formatToParts(ms)) p[type] = value

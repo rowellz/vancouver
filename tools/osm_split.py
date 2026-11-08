@@ -5,9 +5,9 @@ import os, pickle, sys, time
 from collections import defaultdict
 import osmium
 sys.path.insert(0, os.path.dirname(__file__))
-from common import xy, L1, extent, SHOP_AMENITY
+from common import xy, L1, extent, SHOP_AMENITY, DATA
 
-SRC = 'data/lm.osm.pbf'
+SRC = f'{DATA}/lm.osm.pbf'
 KEEP_BUILDING = ('building', 'building:part', 'height', 'min_height', 'building:levels', 'building:min_level', 'roof:shape', 'roof:height',
                  'roof:levels', 'roof:colour', 'building:colour', 'building:material', 'roof:material', 'roof:direction', 'roof:orientation',
                  'name', 'amenity', 'shop', 'tourism', 'layer', 'heritage', 'historic', 'start_date', 'building:architecture', 'office')
@@ -74,7 +74,10 @@ for o in fp:
         except osmium.InvalidLocationError: continue
         if len(pts) < 2: continue
         coords = [p for p, _ in pts]
-        put('lines', bbox(coords), (o.id, coords, [r for _, r in pts], keep(tags, KEEP_LINE))); n['lines'] += 1
+        bb = bbox(coords)
+        if tags.get('natural') == 'coastline':  # tiles.py cuts the sea 8 m past a tile's edges: a coastline that ends
+            bb = (bb[0] - 16, bb[1] - 16, bb[2] + 16, bb[3] + 16)  # just past one must be in that tile too, or its shore has a gap
+        put('lines', bb, (o.id, coords, [r for _, r in pts], keep(tags, KEEP_LINE))); n['lines'] += 1
     elif o.is_node():
         if not tags: continue
         t = tags
@@ -87,7 +90,7 @@ for o in fp:
             put('nodes', (p[0], p[1], p[0], p[1]), (o.id, p, keep(t, ('shop', 'office', 'craft', 'amenity')))); n['shops'] += 1
 print({k: v for k, v in n.items()}, round(time.time() - t0), 's', flush=True)
 
-os.makedirs('data/feat', exist_ok=True)
+os.makedirs(f'{DATA}/feat', exist_ok=True)
 for (i, j), b in buckets.items():
-    with open(f'data/feat/{i}_{j}.pkl', 'wb') as f: pickle.dump(dict(b), f, protocol=5)
+    with open(f'{DATA}/feat/{i}_{j}.pkl', 'wb') as f: pickle.dump(dict(b), f, protocol=5)
 print(len(buckets), 'buckets written', round(time.time() - t0), 's')

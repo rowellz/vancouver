@@ -42,6 +42,7 @@ Turn it on by adding its path to `public/plugins/index.json`, or try it locally 
 | | |
 |---|---|
 | `city.version` | API version (1) |
+| `city.place` | which city the map is: `{ name, title, short, latlon: [lat, lon], tz }` (Vancouver, or another city baked with `CITY=<name>` and opened with `?city=<name>`, see the README). A plugin made for one city's data (transit, ships, landmarks) is listed only in that city's plugins |
 | `city.THREE` | the three.js module the page uses (r170) |
 | `city.scene` | the world; x east, y up, z south, 1 unit = 1 metre |
 | `city.overlay` | drawn after everything, no outlines or shadows |
@@ -144,7 +145,7 @@ back), `streetSky` (the weather's sky gradient and fog at street level), `touchB
 Plugins may import from `core/` (relative paths, e.g. `'../../core/util.js'`):
 
 - `core/util.js` (no three.js, no DOM): `clamp`, `smooth`, `wrap`, `EASE`, `mulberry32` (seeded random),
-  `vancouver(ms)` (the wall clock in Vancouver), `getJSON`, `esc` (for `innerHTML`), `inPoly`, `circleBox`,
+  `vancouver(ms)` (the wall clock in the city: Vancouver's, or `city.place.tz`), `getJSON`, `esc` (for `innerHTML`), `inPoly`, `circleBox`,
   `sampleGrid` and `NOISE_GLSL` (hash and value noise for shaders).
 - `core/kit.js`: the low-poly model kit (see the player, below); `k.geometry(true)` with `kitMaterial(THREE)` for
   plain vertex-coloured models.

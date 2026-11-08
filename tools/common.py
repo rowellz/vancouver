@@ -1,14 +1,17 @@
-# What the bake tools share. The map's frame: world metres east (x) and north (y) of an origin in downtown
-# Vancouver, equirectangular. Heights are real elevations in metres (CGVD2013, from NRCan HRDEM / MRDEM).
+# What the bake tools share. The map's frame: world metres east (x) and north (y) of the city's origin (downtown
+# Vancouver; tools/cities/<CITY>.py), equirectangular. Heights are real elevations in metres (Vancouver: CGVD2013, from
+# NRCan HRDEM / MRDEM; Manhattan: NAVD88, from the 2017 NYC LiDAR / USGS 3DEP).
 # Also: OpenStreetMap line kinds, the per-tile inputs on disk (data/feat, data/hr), ring databases, retries.
 # Light on purpose (the standard library; numpy only inside the functions that need it): importing it costs
 # nothing, unlike tiles.py, which loads its inputs.
 import math, os, pickle, time
 
-LAT_O, LON_O, SC = 49.28606407, -123.10901045, 0.99744659
-KX = 111320 * math.cos(math.radians(49.2845)) / SC  # metres per degree of longitude
-KY = 110574 / SC                                     # metres per degree of latitude
-BBOX = (48.99, -123.33, 49.48, -122.40)              # S, W, N, E: the Lower Mainland and the North Shore mountains
+from cities import city, NAME as CITY, DATA, TILES  # CITY=<name>: tools/cities/<name>.py (default vancouver)
+
+LAT_O, LON_O = city.ORIGIN
+KX = getattr(city, 'KX', None) or 111320 * math.cos(math.radians(city.KREF_LAT)) / city.SC  # metres per degree of longitude
+KY = getattr(city, 'KY', None) or 110574 / city.SC                                           # metres per degree of latitude
+BBOX = city.BBOX                                     # S, W, N, E
 L0, L1, L2 = 1024, 4096, 16384                       # tile sizes per level of detail, metres
 HR = 2.0                                             # HRDEM cell (data/hr), metres
 
@@ -106,7 +109,7 @@ def densify(pts, step):
 # ---------------------------------------------------------------- per-tile inputs on disk
 def load_feat(i, j):
     """the OpenStreetMap features of a 4096 m tile (osm_split.py: data/feat/<i>_<j>.pkl), {} if there are none"""
-    p = f'data/feat/{i}_{j}.pkl'
+    p = f'{DATA}/feat/{i}_{j}.pkl'
     if not os.path.exists(p): return {}
     with open(p, 'rb') as f: return pickle.load(f)
 
@@ -118,7 +121,7 @@ def hr_tile(i, j):
     """(dsm, dtm) of a 4 km HRDEM tile (hrdem.py: data/hr/<i>_<j>.npz), or None"""
     import numpy as np
     if (i, j) not in HR_CACHE:
-        p = f'data/hr/{i}_{j}.npz'
+        p = f'{DATA}/hr/{i}_{j}.npz'
         d = np.load(p) if os.path.exists(p) else None
         HR_CACHE[(i, j)] = (d['dsm'], d['dtm']) if d is not None and 'dsm' in d and 'dtm' in d else None
         if len(HR_CACHE) > 12: HR_CACHE.pop(next(iter(HR_CACHE)))

@@ -6,7 +6,7 @@ import os, sys
 from multiprocessing import Pool
 import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
-from common import LON_O, LAT_O, KX, KY, L1 as T, HR as RES, all_tiles, retry
+from common import LON_O, LAT_O, KX, KY, L1 as T, HR as RES, all_tiles, retry, DATA
 
 N = int(T / RES)
 URL = '/vsicurl/https://canelevation-dem.s3.ca-central-1.amazonaws.com/hrdem-mosaic-2m/2_3-mosaic-2m-{}.tif'
@@ -26,7 +26,7 @@ def fetch_once(ij):
     from rasterio.warp import reproject, Resampling
     from rasterio.transform import Affine
     i, j = ij
-    out = f'data/hr/{i}_{j}.npz'
+    out = f'{DATA}/hr/{i}_{j}.npz'
     if os.path.exists(out): return ij, 'cached'
     # the destination grid in lon/lat, linear in the world frame (equirectangular), north row first
     lon0, lat1 = LON_O + i * T / KX, LAT_O + (j + 1) * T / KY
@@ -44,7 +44,7 @@ def fetch_once(ij):
 
 
 if __name__ == '__main__':
-    os.makedirs('data/hr', exist_ok=True)
+    os.makedirs(f'{DATA}/hr', exist_ok=True)
     ts = all_tiles()
     print(len(ts), 'tiles', flush=True)
     with Pool(int(sys.argv[1]) if len(sys.argv) > 1 else 12) as p:

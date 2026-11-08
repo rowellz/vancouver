@@ -61,7 +61,9 @@ export class Tiles {
   }
 
   async init() {
-    const idx = await fetch(this.base + 'index.json', { cache: 'no-cache' }).then((r) => r.json())
+    const r = await fetch(this.base + 'index.json', { cache: 'no-cache' })
+    if (!r.ok) throw new Error(`no map at ${new URL(this.base).pathname} (HTTP ${r.status}): bake its tiles first (README)`)
+    const idx = await r.json()
     this.index = idx
     this.have = [new Set(idx.l0), new Set(idx.l1)]
     // a coarse height grid of the whole map (tools/heights.py), so heights are right before tiles arrive

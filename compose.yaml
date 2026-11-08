@@ -1,6 +1,8 @@
 # Local development: the site and the live service, as they run in production, on one machine.
 #   docker compose up --build          → http://localhost:48500 (live service also on :48501)
-#   docker compose --profile bake run --rm bake    → bakes the map into public/tiles (long: downloads OSM, LiDAR)
+#   docker compose --profile bake run --rm bake    → bakes the city in CITY (tools/cities/; nyc unless set):
+#     data/nyc → public/tiles/nyc, opened with http://localhost:48500/?city=nyc (long: downloads OSM, LiDAR);
+#     CITY=vancouver: data/ → public/tiles, the site's own map
 # public/ is mounted into nginx, so edits show on reload (nginx caches JS for an hour: keep devtools' cache off).
 # Production does not use this file: Tugport builds Dockerfile and server/Dockerfile and mounts the tiles volume.
 services:
@@ -22,6 +24,7 @@ services:
       - live-data:/data
 
   # the map bake (tools/bake-all.sh) in its toolbox; downloads stay in data/ between runs, tiles land in public/tiles
+  # (bake-all.sh picks data/<city>/ and public/tiles/<city>/ for a city other than Vancouver)
   bake:
     profiles: [bake]
     build:
@@ -29,7 +32,9 @@ services:
       dockerfile: bake.Dockerfile
     command: sh tools/bake-all.sh
     environment:
+      CITY: ${CITY:-nyc}
       PROCS: ${PROCS:-4}
+      ELEV_PROCS: ${ELEV_PROCS:-} # the LiDAR step's workers (default PROCS): 1 on a small machine
       FRESH: ${FRESH:-0}
     volumes:
       - ./tools:/w/tools:ro

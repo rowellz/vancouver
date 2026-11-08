@@ -46,6 +46,23 @@ isoworld's [Isometric Vancouver](https://vancouver.isoworld.xyz/).
    the street; a short list of landmarks (`LOOKS`) is set by hand from public photos.
 6. `tools/publish.sh` copies the tiles to the server. They are not in git.
 
+## Other cities
+
+The bake makes any city with a module in `tools/cities/` (`vancouver.py` is the default; `nyc.py`, Manhattan, is the
+second): its frame (origin, bounding box), its OpenStreetMap extract, elevation source and datasets, the look of its
+neighbourhoods, and what the page shows (title, timezone, start view, plugins, credits, written into the tiles'
+`index.json`). `CITY=<name>` picks one; its inputs go in `data/<name>/` and its tiles in `public/tiles/<name>/`
+(Vancouver keeps `data/` and `public/tiles/`), and `?city=<name>` opens it. With Docker:
+`CITY=nyc docker compose --profile bake run --rm bake`, then http://localhost:48500/?city=nyc.
+
+Manhattan, from the Battery to Inwood with the shores across the rivers, comes from the 2017 New York City
+topobathymetric LiDAR on NOAA's open data bucket (`tools/nyc_lidar.py`): the bare-earth DEM as terrain, and the
+highest return per 2 m cell of its point clouds (read remotely, coarse octree levels only) as the surface that
+shapes roofs and finds trees; USGS 3DEP fills in where it has no data. Street trees and their species come from the
+2015 Street Tree Census. It has the core map (terrain, water, streets, buildings, trees) with music, weather and
+traffic; the plugins made for Vancouver's data (transit, ships, landmarks, driving, sailing, planes, multiplayer)
+are not on for it yet.
+
 ## How it runs
 
 `public/` is the site (nginx, `Dockerfile`; Tugport `borodutch/vancouver` auto-deploys `main`, with the tiles on a
@@ -60,8 +77,8 @@ trolley wires), walking, hiking real trails and sailing through it all. See
 
 Locally, `docker compose up --build` serves the site at http://localhost:48500 with `public/` mounted (edits show on
 reload) and the live service (`server/`, visitor counts, multiplayer, chat) behind `/live` as in production.
-`docker compose --profile bake run --rm bake` runs the whole bake (`tools/bake-all.sh`, `PROCS=n`, `FRESH=1`) into
-`public/tiles`.
+`docker compose --profile bake run --rm bake` runs the whole bake (`tools/bake-all.sh`, `PROCS=n`, `ELEV_PROCS=n`,
+`FRESH=1`) for the city in `CITY` (above; `nyc` unless set, `CITY=vancouver` for this map's own tiles).
 
 Map data © OpenStreetMap contributors (ODbL). City of Vancouver Open Data; 2022 orthophoto and LiDAR, property tax
 report and heritage register © City of Vancouver (Open Government Licence – Vancouver). Street photos: Mapillary

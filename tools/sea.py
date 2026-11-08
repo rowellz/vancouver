@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage
 sys.path.insert(0, os.path.dirname(__file__))
-from common import extent
+from common import extent, DATA
 
 C = 4.0
 X0, Y0, X1, Y1 = extent()
@@ -14,7 +14,7 @@ W, H = int((X1 - X0) / C) + 1, int((Y1 - Y0) / C) + 1
 px = lambda p: ((p[0] - X0) / C, (Y1 - p[1]) / C)
 
 seen, coast = set(), []
-for f in glob.glob('data/feat/*.pkl'):
+for f in glob.glob(f'{DATA}/feat/*.pkl'):
     for wid, coords, refs, tags in pickle.load(open(f, 'rb')).get('lines', []):
         if tags.get('natural') == 'coastline' and wid not in seen:
             seen.add(wid); coast.append(coords)
@@ -82,5 +82,5 @@ sea |= ndimage.binary_dilation(sea) & wall
 mixed = [(k, int(v[0]), int(v[1])) for k, v in enumerate(votes) if v.min() > 50]
 print('mixed regions (sea, land votes):', mixed[:10], flush=True)
 print('sea fraction', round(float(sea.mean()), 3), flush=True)
-np.savez_compressed('data/sea.npz', sea=sea.astype(np.uint8), x0=X0, y1=Y1, cell=C)
-Image.fromarray((sea * 255).astype(np.uint8)).resize((W // 8, H // 8)).save('data/sea-preview.png')
+np.savez_compressed(f'{DATA}/sea.npz', sea=sea.astype(np.uint8), x0=X0, y1=Y1, cell=C)
+Image.fromarray((sea * 255).astype(np.uint8)).resize((W // 8, H // 8)).save(f'{DATA}/sea-preview.png')

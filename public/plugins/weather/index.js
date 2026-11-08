@@ -1,4 +1,4 @@
-// Weather and time of day, synced to the real Vancouver weather by default, with a picker.
+// Weather and time of day, synced to the real weather in the city (city.place: Vancouver by default) by default, with a picker.
 // Weather data: Open-Meteo (https://open-meteo.com), CC BY 4.0, current conditions refreshed every 15 minutes.
 // Sun position: the NOAA general solar position equations (fractional-year series), no library.
 // Sets `city.weather = { kind, intensity, isNight, hour, live, wind, atmosphere }` and emits 'weather' whenever it
@@ -9,8 +9,8 @@
 // views (city.surface).
 import { vancouver, getJSON, NOISE_GLSL } from '../../core/util.js'
 
-const LAT = 49.2827, LON = -123.1207 // downtown Vancouver
-const API = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&current=temperature_2m,weather_code,cloud_cover,precipitation,wind_speed_10m,wind_direction_10m&wind_speed_unit=ms`
+let LAT = 49.2827, LON = -123.1207 // downtown Vancouver, or the city's own place (city.place.latlon)
+const API = () => `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&current=temperature_2m,weather_code,cloud_cover,precipitation,wind_speed_10m,wind_direction_10m&wind_speed_unit=ms`
 const KEY = 'vancouver.weather'
 const RAD = Math.PI / 180
 
@@ -94,6 +94,8 @@ const PICKS = { clear: 0.1, cloudy: 0.8, rain: 0.6, storm: 0.9, snow: 0.6, fog: 
 const ICON = { clear: '☀︎', night: '☾︎', cloudy: '⛅︎', overcast: '☁︎', fog: '≋', drizzle: '☂︎', rain: '☂︎', storm: '⚡︎', snow: '❄︎' }
 
 export default function weather(city) {
+  if (city.place?.latlon) [LAT, LON] = city.place.latlon
+  const where = city.place?.short || 'Vancouver'
   const { THREE } = city
   const { sun, hemi } = city.light, U = city.post.uniforms
   const saved = { sunC: sun.color.clone(), sunI: sun.intensity, sky: hemi.color.clone(), gnd: hemi.groundColor.clone(), hemiI: hemi.intensity, dir: sun.position.clone().sub(sun.target.position).normalize() }
@@ -544,7 +546,7 @@ export default function weather(city) {
     if (document.hidden || busy) return
     busy = true
     try {
-      const j = await getJSON(API)
+      const j = await getJSON(API())
       live = fromOpenMeteo(j.current); fetchedAt = Date.now()
       apply()
     } catch (e) { console.warn('weather: Open-Meteo', e); if (!live) { live = false; ui() } } finally { busy = false }
@@ -568,7 +570,7 @@ export default function weather(city) {
   P.innerHTML = `<div class="now"></div>
     <h3>Weather</h3><div class="chips">${['live', 'clear', 'cloudy', 'rain', 'storm', 'snow', 'fog'].map((k) => `<button type="button" data-k="${k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
     <h3>Time of day</h3><div class="row"><button type="button" data-t="live">Live</button><input type="range" min="0" max="24" step="0.25" aria-label="Hour of day"><span class="clock"></span></div>
-    <div class="credit">Vancouver weather by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0)</div>`
+    <div class="credit">${where} weather by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0)</div>`
   const range = P.querySelector('input'), clock = P.querySelector('.clock'), now = P.querySelector('.now')
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)) } catch {} }
   P.addEventListener('click', (e) => {
@@ -584,7 +586,7 @@ export default function weather(city) {
     P.querySelector('[data-t]').setAttribute('aria-pressed', String(state.hour == null))
     if (document.activeElement !== range) range.value = String(w.hour)
     clock.textContent = hhmm(w.hour)
-    now.textContent = live ? `Live: ${Math.round(live.temp)}°C, ${live.desc}` : live === false ? 'Live: Open-Meteo unreachable, retrying' : 'Live: loading Vancouver weather…'
+    now.textContent = live ? `Live: ${Math.round(live.temp)}°C, ${live.desc}` : live === false ? 'Live: Open-Meteo unreachable, retrying' : `Live: loading ${where} weather…`
     const ic = w.isNight && (w.kind === 'clear' || w.kind === 'cloudy') ? ICON.night : ICON[w.kind]
     btn.set({ icon: ic, label: state.mode === 'live' && live ? `${Math.round(live.temp)}°` : 'Weather' })
   }

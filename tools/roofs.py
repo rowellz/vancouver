@@ -9,10 +9,10 @@ import glob, json, math, os, sys, time
 from multiprocessing import Pool
 import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
-from common import xy, latlon, L1, save_rings, load_feat
+from common import xy, latlon, L1, save_rings, load_feat, DATA
 
-TIF = 'data/ortho/tif'
-OUT = 'data/roofs.npz'
+TIF = f'{DATA}/ortho/tif'
+OUT = f'{DATA}/roofs.npz'
 RES = 0.5       # metres per pixel of the tifs
 CHUNK = 400.0   # work unit, metres (UTM)
 GREEN, WHITE = 1, 2  # flags: rooftop vegetation, white membrane
@@ -113,7 +113,7 @@ def footprints(cover):
             for oid, prs, t in load_feat(i, j).get('buildings', []):
                 for outer, inners in prs:
                     if len(outer) >= 4: rings.append(outer); src.append(1 if 'building' not in t else 0)
-    for f in json.load(open('data/bf2009.geojson'))['features']:
+    for f in json.load(open(f'{DATA}/bf2009.geojson'))['features']:
         g = f['geometry']
         for poly in (g['coordinates'] if g['type'] == 'MultiPolygon' else [g['coordinates']] if g['type'] == 'Polygon' else []):
             r = poly[0]
@@ -278,7 +278,7 @@ def preview(name, half=160):
             dro.line(pts + pts[:1], fill=(255, 0, 255), width=1)
     W, H = ortho.size
     out = Image.new('RGB', (W * 2 + 8, H), (255, 255, 255)); out.paste(ortho, (0, 0)); out.paste(flat, (W + 8, 0))
-    p = f'data/ortho/preview-{name}.png'
+    p = f'{DATA}/ortho/preview-{name}.png'
     out.save(p); print(p)
 
 
@@ -288,7 +288,7 @@ def check():
     assert np.abs(lab_srgb(lab).astype(int) - [[200, 60, 40], [30, 30, 30], [240, 240, 235]]).max() <= 1
     assert roof_colour([(-123.0, 49.40), (-122.999, 49.40), (-122.999, 49.401), (-123.0, 49.401)]) is None  # outside the photo
     cx, cy = xy(*AREAS['yaletown'])
-    bs = [r[0] for _, prs, t in pickle.load(open('data/feat/-1_-1.pkl', 'rb'))['buildings'] for r in prs
+    bs = [r[0] for _, prs, t in pickle.load(open(f'{DATA}/feat/-1_-1.pkl', 'rb'))['buildings'] for r in prs
           if 'building' in t and math.hypot(r[0][0][0] - cx, r[0][0][1] - cy) < 300]
     t0 = time.time(); got = [roof_colour_xy(r[:-1]) for r in bs]; dt = time.time() - t0
     assert sum(g is not None for g in got) > 0.8 * len(got), 'downtown buildings should mostly have a colour'
